@@ -6,6 +6,7 @@ MrBunny AI is a Streamlit assistant with:
 - Browser-saved chats on the same device
 - Optional OCR text extraction from uploaded images
 - Voice playback with gTTS
+- Free local music loop generation without a paid music API
 - OpenRouter-backed responses
 
 ## Setup
@@ -33,5 +34,6 @@ streamlit run app.py
 ## Notes
 
 - Do not commit real API keys.
+- Music generation is built in and does not need ElevenLabs or any paid music API.
 - OCR is optional. If `OCR_API_KEY` is missing, image upload still works but text extraction is skipped.
 - Chats are stored in the browser on the same device, so clearing browser storage can remove them.

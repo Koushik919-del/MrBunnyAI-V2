@@ -1,8 +1,12 @@
+import hashlib
+import math
+import random
 import re
+import struct
+import wave
 from io import BytesIO
 from uuid import uuid4
 
-import requests
 import streamlit as st
 from gtts import gTTS
 from PIL import Image
@@ -21,9 +25,7 @@ from mrbunny_core import (
 st.set_page_config(page_title="MrBunny AI", page_icon="🐰", layout="wide")
 
 BROWSER_DEVICE_KEY = "mrbunny_device_id_v1"
-POLLINATIONS_AUDIO_URL = "https://gen.pollinations.ai/v1/audio/speech"
-POLLINATIONS_KEY = "sk_3wQt8JR0UCFgemr2fnNDTfSbnq8MqguC"  # rotate this!
-ELEVEN_LABS_API_KEY = "sk_f8a4eeb628eabf377c963ceea90cffc54959e1d638edf030"
+SAMPLE_RATE = 22050
 
 def init_session_state() -> None:
     st.session_state.setdefault("conversations", {})
@@ -126,40 +128,180 @@ def wants_image_generation(text: str) -> bool:
     return any(phrase in lowered for phrase in image_phrases)
 
 
-def generate_music(prompt: str, duration: int = 30) -> tuple[str, bytes | None]:
-    """Generate music using ElevenLabs API. Returns (reply, mp3_bytes)."""
-    # Hardcoded API Key for testing
-    api_key = "sk_f8a4eeb628eabf377c963ceea90cffc54959e1d638edf030"
-    url = "https://api.elevenlabs.io/v1/music/generate"
-    
-    headers = {
-        "xi-api-key": api_key,
-        "Content-Type": "application/json"
+def note_frequency(note_name: str, octave: int) -> float:
+    notes = {
+        "C": -9,
+        "C#": -8,
+        "D": -7,
+        "D#": -6,
+        "E": -5,
+        "F": -4,
+        "F#": -3,
+        "G": -2,
+        "G#": -1,
+        "A": 0,
+        "A#": 1,
+        "B": 2,
     }
-    
-    data = {
-        "prompt": prompt,
+    return 440.0 * (2 ** ((notes[note_name] + (octave - 4) * 12) / 12))
+
+
+def envelope(position: int, length: int, attack: float = 0.04, release: float = 0.18) -> float:
+    if length <= 0:
+        return 0.0
+    progress = position / length
+    if progress < attack:
+        return progress / attack
+    if progress > 1 - release:
+        return max(0.0, (1 - progress) / release)
+    return 1.0
+
+
+def sine(freq: float, t: float) -> float:
+    return math.sin(2 * math.pi * freq * t)
+
+
+def soft_square(freq: float, t: float) -> float:
+    return math.tanh(2.4 * sine(freq, t))
+
+
+def choose_music_style(prompt: str) -> dict:
+    text = prompt.lower()
+    style = {
+        "name": "dreamy synth loop",
+        "bpm": 96,
+        "scale": ["C", "D", "E", "G", "A"],
+        "chords": [["C", "E", "G"], ["A", "C", "E"], ["F", "A", "C"], ["G", "B", "D"]],
+        "wave": "sine",
+        "swing": 0.0,
     }
-    
-    try:
-        # Using a longer timeout as music generation is a heavy task
-        resp = requests.post(url, headers=headers, json=data, timeout=150)
-        
-        if resp.status_code != 200:
-            try:
-                # Try to get the specific error message from ElevenLabs
-                error_info = resp.json()
-                error_msg = error_info.get("detail", {}).get("message", resp.text)
-            except:
-                error_msg = resp.text
-            return f"ElevenLabs Error (HTTP {resp.status_code}): {error_msg}", None
 
-        return "MrBunny has finished your masterpiece! 🎵", resp.content
+    if any(word in text for word in ("lofi", "lo-fi", "chill", "calm", "study", "sleep")):
+        style.update(
+            {
+                "name": "lo-fi chill loop",
+                "bpm": 82,
+                "scale": ["A", "B", "C", "E", "G"],
+                "chords": [["A", "C", "E"], ["F", "A", "C"], ["C", "E", "G"], ["G", "B", "D"]],
+                "swing": 0.12,
+            }
+        )
+    elif any(word in text for word in ("game", "8bit", "8-bit", "arcade", "retro")):
+        style.update(
+            {
+                "name": "retro game loop",
+                "bpm": 128,
+                "scale": ["C", "D", "E", "G", "A"],
+                "chords": [["C", "E", "G"], ["G", "B", "D"], ["A", "C", "E"], ["F", "A", "C"]],
+                "wave": "square",
+            }
+        )
+    elif any(word in text for word in ("sad", "dark", "moody", "cinematic", "epic")):
+        style.update(
+            {
+                "name": "moody cinematic loop",
+                "bpm": 72,
+                "scale": ["D", "F", "G", "A", "C"],
+                "chords": [["D", "F", "A"], ["A", "C", "E"], ["B", "D", "F"], ["G", "B", "D"]],
+            }
+        )
+    elif any(word in text for word in ("happy", "dance", "pop", "upbeat", "party")):
+        style.update(
+            {
+                "name": "bright pop loop",
+                "bpm": 118,
+                "scale": ["G", "A", "B", "D", "E"],
+                "chords": [["G", "B", "D"], ["D", "F#", "A"], ["E", "G", "B"], ["C", "E", "G"]],
+            }
+        )
+    return style
 
-    except requests.exceptions.Timeout:
-        return "The request timed out. ElevenLabs is taking a while to compose.", None
-    except Exception as exc:
-        return f"Music generation failed: {exc}", None
+
+def synth_note(samples: list[float], start: int, length: int, freq: float, volume: float, wave_name: str = "sine") -> None:
+    for offset in range(max(0, length)):
+        index = start + offset
+        if index >= len(samples):
+            break
+        t = offset / SAMPLE_RATE
+        tone = soft_square(freq, t) if wave_name == "square" else sine(freq, t)
+        samples[index] += tone * volume * envelope(offset, length)
+
+
+def synth_kick(samples: list[float], start: int, length: int, volume: float) -> None:
+    for offset in range(length):
+        index = start + offset
+        if index >= len(samples):
+            break
+        progress = offset / length
+        freq = 95 - 55 * progress
+        samples[index] += sine(freq, offset / SAMPLE_RATE) * volume * ((1 - progress) ** 2)
+
+
+def synth_hat(samples: list[float], start: int, length: int, volume: float, rng: random.Random) -> None:
+    for offset in range(length):
+        index = start + offset
+        if index >= len(samples):
+            break
+        progress = offset / length
+        samples[index] += rng.uniform(-1, 1) * volume * ((1 - progress) ** 3)
+
+
+def samples_to_wav(samples: list[float]) -> bytes:
+    output = BytesIO()
+    peak = max(max(abs(sample) for sample in samples), 0.01)
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(SAMPLE_RATE)
+        for sample in samples:
+            value = int(max(-1.0, min(1.0, sample / peak * 0.85)) * 32767)
+            wav_file.writeframes(struct.pack("<h", value))
+    output.seek(0)
+    return output.read()
+
+
+def generate_music(prompt: str, duration: int = 16) -> tuple[str, bytes | None]:
+    """Generate a free local WAV loop from the prompt. Returns (reply, wav_bytes)."""
+    seed = int(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12], 16)
+    rng = random.Random(seed)
+    style = choose_music_style(prompt)
+    total_samples = SAMPLE_RATE * duration
+    samples = [0.0] * total_samples
+    beat_seconds = 60 / style["bpm"]
+    beat_samples = int(SAMPLE_RATE * beat_seconds)
+    step_samples = max(1, beat_samples // 2)
+    steps = max(1, total_samples // step_samples)
+
+    melody = [rng.choice(style["scale"]) for _ in range(steps)]
+    for step in range(steps):
+        start = step * step_samples
+        chord = style["chords"][(step // 8) % len(style["chords"])]
+
+        if step % 8 == 0:
+            for note in chord:
+                synth_note(samples, start, beat_samples * 4, note_frequency(note, 4), 0.11, style["wave"])
+
+        if step % 2 == 0:
+            synth_note(samples, start, int(beat_samples * 0.9), note_frequency(chord[0], 2), 0.22, "square")
+
+        if step % 4 == 0:
+            synth_kick(samples, start, int(beat_samples * 0.55), 0.9)
+        elif step % 4 == 2:
+            synth_hat(samples, start, int(beat_samples * 0.25), 0.22, rng)
+
+        if step % 2 == 1 or "game" in style["name"]:
+            offset = int(step_samples * style["swing"] if step % 2 else 0)
+            synth_note(
+                samples,
+                start + offset,
+                int(step_samples * 0.82),
+                note_frequency(melody[step], rng.choice([4, 5])),
+                0.16,
+                style["wave"],
+            )
+
+    return f"MrBunny made a free {style['name']} from your prompt. No paid music API needed.", samples_to_wav(samples)
+
 
 def speak(text: str) -> None:
     clean_text = remove_emojis(text).strip()
@@ -190,7 +332,7 @@ def render_generated_image(image_bytes: bytes | None) -> None:
 def render_generated_music(music_bytes: bytes | None) -> None:
     if not music_bytes:
         return
-    st.audio(music_bytes, format="audio/mp3")
+    st.audio(music_bytes, format="audio/wav")
 
 
 def add_convo(name: str) -> None:
