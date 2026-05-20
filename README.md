@@ -1,4 +1,4 @@
-# Old-MrBunny-AI
+# MrBunny AI V2
 
 MrBunny AI is a Streamlit assistant with:
 
@@ -8,6 +8,7 @@ MrBunny AI is a Streamlit assistant with:
 - Voice playback with gTTS
 - Free local music loop generation without a paid music API
 - OpenRouter-backed responses
+- AI that can make images
 
 ## Setup
 
