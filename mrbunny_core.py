@@ -5,6 +5,7 @@ import tomllib
 import base64
 import json
 import secrets
+import time
 from urllib.parse import urlencode
 
 import requests
@@ -21,6 +22,8 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 DEFAULT_GOOGLE_SCOPES = "openid email profile"
+MUSICGEN_API_URL = "https://api-inference.huggingface.co/models/facebook/musicgen-small"
+
 PLACEHOLDER_VALUES = {
     "",
     "your-openrouter-key",
@@ -398,8 +401,58 @@ def extract_text_from_image(image: Image.Image, ocr_api_key: str) -> str:
     return ""
 
 
-import streamlit as st
-from music_engine import generate_bunny_music
+# ==========================================
+# MRBUNNY NATIVE MUSIC COMPONENT
+# ==========================================
+
+def generate_bunny_music(prompt: str, max_retries: int = 5) -> bytes | None:
+    """
+    Calls Hugging Face Serverless MusicGen API utilizing the local get_secret architecture.
+    Handles cold-start statuses (503) seamlessly and outputs raw track audio data.
+    """
+    hf_token = get_secret("HF_ACCESS_TOKEN")
+    if not hf_token:
+        st.error("🔑 Missing `HF_ACCESS_TOKEN`. Add it to your secrets config file.")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {"inputs": prompt}
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(MUSICGEN_API_URL, headers=headers, json=payload, timeout=45)
+            
+            if response.status_code == 200:
+                return response.content
+                
+            elif response.status_code == 503:
+                # Catching serverless framework container cold states
+                estimated_time = response.json().get("estimated_time", 15)
+                st.toast(f"⏳ Waking up the music server... waiting {int(estimated_time)}s.")
+                time.sleep(estimated_time)
+                continue
+                
+            else:
+                st.error(f"❌ Music Generation Error ({response.status_code}): {response.text}")
+                return None
+                
+        except requests.RequestException as e:
+            if attempt < max_retries:
+                time.sleep(4)
+            else:
+                st.error(f"⚠️ Connection error to audio server: {e}")
+                return None
+                
+    st.error("💥 The audio generation hardware timed out while warming up.")
+    return None
+
+
+# ==========================================
+# UI RENDERING APPLICATION LAYER
+# ==========================================
 
 st.title("🐰 MrBunny AI Music Lab")
 
@@ -407,20 +460,19 @@ user_prompt = st.text_input("Describe the track you want:", "A bouncy 8bit chipt
 
 if st.button("Generate Free Track"):
     if user_prompt:
-        # Call the integration function
-        audio_file_path = generate_bunny_music(user_prompt)
-        
-        if audio_file_path:
-            st.success("🎉 Music generation complete!")
+        with st.spinner(f"🎵 MrBunny is composing: '{user_prompt}'..."):
+            audio_data = generate_bunny_music(user_prompt)
             
-            # Display a native audio playback widget 
-            st.audio(audio_file_path, format="audio/wav")
-            
-            # Allow users to save the file to their hardware
-            with open(audio_file_path, "rb") as file:
+            if audio_data:
+                st.success("🎉 Music generation complete!")
+                
+                # Render the playback widget directly from memory buffer
+                st.audio(audio_data, format="audio/wav")
+                
+                # Dynamic download option 
                 st.download_button(
                     label="💾 Download Track",
-                    data=file,
+                    data=audio_data,
                     file_name="mrbunny_creation.wav",
                     mime="audio/wav"
                 )
