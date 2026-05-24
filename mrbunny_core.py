@@ -449,7 +449,7 @@ def generate_bunny_music(prompt: str, max_retries: int = 5) -> bytes | None:
 st.set_page_config(page_title="MrBunny AI Dashboard", page_icon="🐰", layout="wide")
 st.title("🐰 MrBunny AI Hub")
 
-# Basic Session State initialization for demonstration purposes
+# Basic Session State initialization
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
@@ -463,7 +463,6 @@ for msg in st.session_state.chat_history:
 st.markdown("---")
 
 # --- CONSOLIDATED CONTROL INPUT ROW ---
-# Using columns to put all feature triggers next to each other
 col_prompt, col_upload, col_chat_btn, col_img_btn, col_music_btn = st.columns([5, 2, 1, 1, 1.2])
 
 with col_prompt:
@@ -522,7 +521,6 @@ elif chat_submitted or (prompt_input and not image_submitted and not music_submi
     if prompt_input:
         openrouter_key = get_secret("OPENROUTER_API_KEY")
         
-        # Check if an image attachment exists to apply OCR processing first
         ocr_text = ""
         if uploaded_file:
             ocr_key = get_secret("OCR_SPACE_API_KEY")
@@ -539,7 +537,5 @@ elif chat_submitted or (prompt_input and not image_submitted and not music_submi
 
         with st.spinner("🐰 MrBunny is thinking..."):
             ai_reply = get_ai_response(combined_prompt, openrouter_key, st.session_state.chat_history)
-            
-            # Save transaction records to internal memory state logs
             st.session_state.chat_history.append({"user": prompt_input, "ai": ai_reply})
             st.rerun()
