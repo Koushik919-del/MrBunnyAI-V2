@@ -396,3 +396,33 @@ def extract_text_from_image(image: Image.Image, ocr_api_key: str) -> str:
     except requests.RequestException:
         return ""
     return ""
+
+
+import streamlit as st
+from music_engine import generate_bunny_music
+
+st.title("🐰 MrBunny AI Music Lab")
+
+user_prompt = st.text_input("Describe the track you want:", "A bouncy 8bit chiptune video game soundtrack")
+
+if st.button("Generate Free Track"):
+    if user_prompt:
+        # Call the integration function
+        audio_file_path = generate_bunny_music(user_prompt)
+        
+        if audio_file_path:
+            st.success("🎉 Music generation complete!")
+            
+            # Display a native audio playback widget 
+            st.audio(audio_file_path, format="audio/wav")
+            
+            # Allow users to save the file to their hardware
+            with open(audio_file_path, "rb") as file:
+                st.download_button(
+                    label="💾 Download Track",
+                    data=file,
+                    file_name="mrbunny_creation.wav",
+                    mime="audio/wav"
+                )
+    else:
+        st.warning("Please enter a text description first!")
