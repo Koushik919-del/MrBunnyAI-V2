@@ -401,18 +401,14 @@ def extract_text_from_image(image: Image.Image, ocr_api_key: str) -> str:
     return ""
 
 
-# ==========================================
-# MRBUNNY NATIVE MUSIC COMPONENT
-# ==========================================
-
 def generate_bunny_music(prompt: str, max_retries: int = 5) -> bytes | None:
     """
-    Calls Hugging Face Serverless MusicGen API utilizing the local get_secret architecture.
-    Handles cold-start statuses (503) seamlessly and outputs raw track audio data.
+    Calls Hugging Face Serverless MusicGen API using the local get_secret system.
+    Handles cold-starts natively (503 status) and returns raw audio bytes.
     """
     hf_token = get_secret("HF_ACCESS_TOKEN")
     if not hf_token:
-        st.error("🔑 Missing `HF_ACCESS_TOKEN`. Add it to your secrets config file.")
+        st.error("🔑 Missing `HF_ACCESS_TOKEN`. Add it to your config secrets.")
         return None
 
     headers = {
@@ -427,18 +423,14 @@ def generate_bunny_music(prompt: str, max_retries: int = 5) -> bytes | None:
             
             if response.status_code == 200:
                 return response.content
-                
             elif response.status_code == 503:
-                # Catching serverless framework container cold states
                 estimated_time = response.json().get("estimated_time", 15)
                 st.toast(f"⏳ Waking up the music server... waiting {int(estimated_time)}s.")
                 time.sleep(estimated_time)
                 continue
-                
             else:
-                st.error(f"❌ Music Generation Error ({response.status_code}): {response.text}")
+                st.error(f"❌ Audio Server Error ({response.status_code}): {response.text}")
                 return None
-                
         except requests.RequestException as e:
             if attempt < max_retries:
                 time.sleep(4)
@@ -446,30 +438,64 @@ def generate_bunny_music(prompt: str, max_retries: int = 5) -> bytes | None:
                 st.error(f"⚠️ Connection error to audio server: {e}")
                 return None
                 
-    st.error("💥 The audio generation hardware timed out while warming up.")
+    st.error("💥 The audio generation server timed out while warming up.")
     return None
 
 
 # ==========================================
-# UI RENDERING APPLICATION LAYER
+# MAIN APPLICATION RENDER WORKFLOW
 # ==========================================
 
-st.title("🐰 MrBunny AI Music Lab")
+st.set_page_config(page_title="MrBunny AI Dashboard", page_icon="🐰", layout="wide")
+st.title("🐰 MrBunny AI Hub")
 
-user_prompt = st.text_input("Describe the track you want:", "A bouncy 8bit chiptune video game soundtrack")
+# Basic Session State initialization for demonstration purposes
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-if st.button("Generate Free Track"):
-    if user_prompt:
-        with st.spinner(f"🎵 MrBunny is composing: '{user_prompt}'..."):
-            audio_data = generate_bunny_music(user_prompt)
-            
+# --- Render Existing Chat Workspace History ---
+for msg in st.session_state.chat_history:
+    if msg.get("user"):
+        st.chat_message("user").write(msg["user"])
+    if msg.get("ai"):
+        st.chat_message("assistant").write(msg["ai"])
+
+st.markdown("---")
+
+# --- CONSOLIDATED CONTROL INPUT ROW ---
+# Using columns to put all feature triggers next to each other
+col_prompt, col_upload, col_chat_btn, col_img_btn, col_music_btn = st.columns([5, 2, 1, 1, 1.2])
+
+with col_prompt:
+    prompt_input = st.text_input(
+        "Message prompt text input:", 
+        placeholder="Ask MrBunny, type an image idea, or specify a music genre...",
+        label_visibility="collapsed"
+    )
+
+with col_upload:
+    uploaded_file = st.file_uploader("Upload attachment", label_visibility="collapsed", type=["png", "jpg", "jpeg"])
+
+with col_chat_btn:
+    chat_submitted = st.button("💬 Chat", use_container_width=True)
+
+with col_img_btn:
+    image_submitted = st.button("🖼️ Image", use_container_width=True)
+
+with col_music_btn:
+    music_submitted = st.button("🎵 Music", use_container_width=True)
+
+
+# --- PROCESS BUTTON TRIGGERED AUTOMATIONS ---
+
+# 1. Handle Music Request Action
+if music_submitted:
+    if prompt_input:
+        with st.spinner(f"🎵 MrBunny is composing audio: '{prompt_input}'..."):
+            audio_data = generate_bunny_music(prompt_input)
             if audio_data:
                 st.success("🎉 Music generation complete!")
-                
-                # Render the playback widget directly from memory buffer
                 st.audio(audio_data, format="audio/wav")
-                
-                # Dynamic download option 
                 st.download_button(
                     label="💾 Download Track",
                     data=audio_data,
@@ -477,4 +503,43 @@ if st.button("Generate Free Track"):
                     mime="audio/wav"
                 )
     else:
-        st.warning("Please enter a text description first!")
+        st.warning("Please type a music theme/description in the text line first!")
+
+# 2. Handle Image Generation Action
+elif image_submitted:
+    if prompt_input:
+        with st.spinner("🖼️ Generating image..."):
+            err, img_bytes = generate_image(prompt_input)
+            if err:
+                st.error(err)
+            elif img_bytes:
+                st.image(img_bytes, caption=f"Generated: {prompt_input}")
+    else:
+        st.warning("Please type an image prompt description in the input bar first!")
+
+# 3. Handle Regular Chat Action
+elif chat_submitted or (prompt_input and not image_submitted and not music_submitted and st.session_state.get('last_prompt') != prompt_input):
+    if prompt_input:
+        openrouter_key = get_secret("OPENROUTER_API_KEY")
+        
+        # Check if an image attachment exists to apply OCR processing first
+        ocr_text = ""
+        if uploaded_file:
+            ocr_key = get_secret("OCR_SPACE_API_KEY")
+            if ocr_key:
+                try:
+                    opened_img = Image.open(uploaded_file)
+                    ocr_text = extract_text_from_image(opened_img, ocr_key)
+                except Exception as e:
+                    st.error(f"Image processing error: {e}")
+
+        combined_prompt = prompt_input
+        if ocr_text:
+            combined_prompt += f"\n\n[Extracted image text context]:\n{ocr_text}"
+
+        with st.spinner("🐰 MrBunny is thinking..."):
+            ai_reply = get_ai_response(combined_prompt, openrouter_key, st.session_state.chat_history)
+            
+            # Save transaction records to internal memory state logs
+            st.session_state.chat_history.append({"user": prompt_input, "ai": ai_reply})
+            st.rerun()
