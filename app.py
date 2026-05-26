@@ -300,7 +300,7 @@ def generate_music(prompt: str, duration: int = 16) -> tuple[str, bytes | None]:
                 style["wave"],
             )
 
-    return f"MrBunny made a free {style['name']} from your prompt. No paid music API needed.", samples_to_wav(samples)
+    return f"MrBunny made a free {style['name']} from your prompt.", samples_to_wav(samples)
 
 
 def speak(text: str) -> None:
