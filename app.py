@@ -447,7 +447,7 @@ def render_feedback(idx: int) -> None:
     current = feedback.get(idx)
     col1, col2, col3 = st.columns([0.14, 0.14, 0.72])
 
-    if col1.button("Play", key=f"speak_{idx}", use_container_width=True):
+    if col1.button("🔊 Play", key=f"speak_{idx}", use_container_width=True):
         st.session_state.pending_audio = str(idx)
 
     if col2.button("👍", key=f"like_{idx}", use_container_width=True):
