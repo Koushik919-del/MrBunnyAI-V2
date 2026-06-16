@@ -15,6 +15,7 @@ from streamlit_local_storage import LocalStorage
 from mrbunny_core import (
     extract_text_from_image,
     generate_image,
+    generate_treblo_music,
     get_ai_response,
     get_secret,
     load_user_conversations,
@@ -335,6 +336,12 @@ def render_generated_music(music_bytes: bytes | None) -> None:
     st.audio(music_bytes, format="audio/wav")
 
 
+def render_generated_music_url(music_url: str | None) -> None:
+    if not music_url:
+        return
+    st.audio(music_url)
+
+
 def add_convo(name: str) -> None:
     clean_name = name.strip()
     if not clean_name:
@@ -487,6 +494,7 @@ def render_main() -> None:
                 st.write(msg["ai"])
             render_generated_image(msg.get("image_bytes"))
             render_generated_music(msg.get("music_bytes"))
+            render_generated_music_url(msg.get("music_url"))
             render_feedback(idx)
 
         if st.session_state.pending_audio == str(idx):
@@ -520,13 +528,15 @@ def render_main() -> None:
             if not clean_text:
                 st.warning("Describe the music you want to generate.")
                 return
-            with st.spinner("MrBunny is composing... 🎵"):
-                reply, music_bytes = generate_music(clean_text)
+            treblo_api_key = get_secret("TREBLO_API_KEY")
+            with st.spinner("MrBunny is composing with Treblo... This can take a couple of minutes."):
+                reply, music_url = generate_treblo_music(clean_text, treblo_api_key)
             convo["messages"].append({
                 "user": clean_text,
                 "ai": reply,
                 "image_bytes": None,
-                "music_bytes": music_bytes,
+                "music_bytes": None,
+                "music_url": music_url,
             })
             if not ghost_enabled:
                 save_device_chats()

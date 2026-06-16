@@ -1,5 +1,6 @@
 import io
 import os
+import time
 from pathlib import Path
 import tomllib
 import base64
@@ -18,6 +19,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 CHAT_MODEL = "openai/gpt-oss-120b:free"
 POLLINATIONS_IMAGE_URL = "https://gen.pollinations.ai/v1/images/generations"
 DEFAULT_POLLINATIONS_IMAGE_MODEL = "flux"
+TREBLO_API_BASE_URL = "https://api.treblo.com/v1"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -31,6 +33,7 @@ PLACEHOLDER_VALUES = {
     "your-real-openrouter-key",
     "your-real-ocr-space-key",
     "your-pollinations-key",
+    "your-treblo-key",
     "your-google-client-id",
     "your-google-client-secret",
     "your-google-redirect-uri",
@@ -193,6 +196,7 @@ def _serialize_conversations(conversations: dict) -> dict:
                 {
                     "user": msg.get("user", ""),
                     "ai": msg.get("ai", ""),
+                    "music_url": msg.get("music_url"),
                     "image_bytes": (
                         base64.b64encode(image_bytes).decode("utf-8")
                         if image_bytes is not None
@@ -217,6 +221,7 @@ def _deserialize_conversations(conversations: dict) -> dict:
                 {
                     "user": msg.get("user", ""),
                     "ai": msg.get("ai", ""),
+                    "music_url": msg.get("music_url"),
                     "image_bytes": (
                         base64.b64decode(image_payload)
                         if image_payload
@@ -372,6 +377,106 @@ def generate_image(prompt: str, api_key: str | None = None) -> tuple[str, bytes 
         return "", base64.b64decode(image_b64)
     except requests.RequestException as exc:
         return f"Error generating image: {exc}", None
+
+
+def _treblo_headers(api_key: str) -> dict:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _read_treblo_status(response: requests.Response) -> str:
+    try:
+        status_payload = response.json()
+    except ValueError:
+        return response.text.strip().strip('"')
+
+    if isinstance(status_payload, str):
+        return status_payload
+    if isinstance(status_payload, dict):
+        return str(status_payload.get("status", "")).strip()
+    return ""
+
+
+def generate_treblo_music(
+    prompt: str,
+    api_key: str,
+    *,
+    instrumental: bool = False,
+    output_format: str = "mp3",
+    poll_timeout: int = 240,
+    poll_interval: int = 5,
+) -> tuple[str, str | None]:
+    if not api_key:
+        return "Missing `TREBLO_API_KEY`. Add it to Streamlit secrets, `.env`, or environment variables.", None
+
+    payload = {
+        "prompt": prompt,
+        "output_format": output_format,
+    }
+    if instrumental:
+        payload["instrumental"] = True
+
+    try:
+        create_response = requests.post(
+            f"{TREBLO_API_BASE_URL}/generations/v3",
+            headers=_treblo_headers(api_key),
+            json=payload,
+            timeout=30,
+        )
+        create_response.raise_for_status()
+        task_id = create_response.json().get("task_id")
+        if not task_id:
+            return "Treblo did not return a task ID. Please try again.", None
+
+        deadline = time.monotonic() + poll_timeout
+        last_status = "RECEIVED"
+        while time.monotonic() < deadline:
+            status_response = requests.get(
+                f"{TREBLO_API_BASE_URL}/generations/status/{task_id}",
+                headers=_treblo_headers(api_key),
+                timeout=30,
+            )
+            status_response.raise_for_status()
+            last_status = _read_treblo_status(status_response)
+
+            if last_status == "SUCCESS":
+                result_response = requests.get(
+                    f"{TREBLO_API_BASE_URL}/generations/{task_id}",
+                    headers=_treblo_headers(api_key),
+                    timeout=30,
+                )
+                result_response.raise_for_status()
+                result = result_response.json()
+                song_paths = result.get("song_paths") or []
+                if not song_paths:
+                    return "Treblo finished, but no audio URL was returned.", None
+                return f"MrBunny generated your Treblo track. Task ID: `{task_id}`", song_paths[0]
+
+            if last_status == "FAILURE":
+                result_response = requests.get(
+                    f"{TREBLO_API_BASE_URL}/generations/{task_id}",
+                    headers=_treblo_headers(api_key),
+                    timeout=30,
+                )
+                error_message = ""
+                if result_response.ok:
+                    error_message = str(result_response.json().get("error_message") or "").strip()
+                detail = f" {error_message}" if error_message else ""
+                return f"Treblo music generation failed.{detail}", None
+
+            time.sleep(poll_interval)
+
+        return (
+            f"Treblo is still working on task `{task_id}`. Last status: `{last_status}`. "
+            "Try the same prompt again in a minute, or check the task in Treblo.",
+            None,
+        )
+    except requests.RequestException as exc:
+        return f"Error calling Treblo music API: {exc}", None
+    except ValueError as exc:
+        return f"Unexpected Treblo response: {exc}", None
 
 
 def extract_text_from_image(image: Image.Image, ocr_api_key: str) -> str:
