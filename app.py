@@ -450,10 +450,10 @@ def render_feedback(idx: int) -> None:
     if col1.button("Play", key=f"speak_{idx}", use_container_width=True):
         st.session_state.pending_audio = str(idx)
 
-    if col2.button("Like", key=f"like_{idx}", use_container_width=True):
+    if col2.button("👍", key=f"like_{idx}", use_container_width=True):
         feedback[idx] = "liked"
 
-    if col3.button("Dislike", key=f"dislike_{idx}", use_container_width=True):
+    if col3.button("👎", key=f"dislike_{idx}", use_container_width=True):
         feedback[idx] = "disliked"
 
     if current == "liked":
