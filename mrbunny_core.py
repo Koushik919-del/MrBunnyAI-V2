@@ -16,7 +16,7 @@ from duckduckgo_search import DDGS
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-CHAT_MODEL = "google/gemma-4-31b-it:free"
+CHAT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 POLLINATIONS_IMAGE_URL = "https://gen.pollinations.ai/v1/images/generations"
 DEFAULT_POLLINATIONS_IMAGE_MODEL = "flux"
 TREBLO_API_BASE_URL = "https://api.treblo.com/v1"
